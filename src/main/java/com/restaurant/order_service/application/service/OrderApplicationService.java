@@ -6,6 +6,7 @@ import com.restaurant.order_service.domain.model.OrderItem;
 import com.restaurant.order_service.domain.model.OrderType;
 import com.restaurant.order_service.domain.port.OrderRepository;
 import org.springframework.stereotype.Service;
+import com.restaurant.order_service.presentation.exception.OrderNotFoundException;
 
 import java.util.List;
 import java.util.UUID;
@@ -60,12 +61,9 @@ public class OrderApplicationService {
     }
 
     public Order findById(UUID id) {
-
         return orderRepository.findById(id)
                 .orElseThrow(() ->
-                        new IllegalArgumentException(
-                                "Pedido no encontrado: " + id
-                        )
+                        new OrderNotFoundException("Pedido no encontrado: " + id)
                 );
     }
 
