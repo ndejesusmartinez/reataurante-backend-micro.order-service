@@ -7,6 +7,9 @@ import com.restaurant.order_service.domain.model.OrderType;
 import com.restaurant.order_service.domain.port.OrderRepository;
 import org.springframework.stereotype.Service;
 import com.restaurant.order_service.presentation.exception.OrderNotFoundException;
+import com.restaurant.order_service.infrastructure.client.InventoryClient;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 import java.util.List;
 import java.util.UUID;
@@ -15,11 +18,14 @@ import java.util.UUID;
 public class OrderApplicationService {
 
     private final OrderRepository orderRepository;
+    private final InventoryClient inventoryClient;
 
     public OrderApplicationService(
-            OrderRepository orderRepository
+            OrderRepository orderRepository,
+            InventoryClient inventoryClient
     ) {
         this.orderRepository = orderRepository;
+        this.inventoryClient = inventoryClient;
     }
 
     public Order create(
@@ -28,6 +34,12 @@ public class OrderApplicationService {
             OrderType orderType,
             List<CreateOrderItemCommand> items
     ) {
+
+        JwtAuthenticationToken authentication =
+            (JwtAuthenticationToken) SecurityContextHolder
+                    .getContext()
+                    .getAuthentication();
+        String token = authentication.getToken().getTokenValue();
 
         if (items == null || items.isEmpty()) {
             throw new IllegalArgumentException(
@@ -50,6 +62,28 @@ public class OrderApplicationService {
             );
 
             order.addItem(orderItem);
+        }
+
+        for (OrderItem item : order.getItems()) {
+            InventoryClient.ProductAvailabilityResponse availability =
+                    inventoryClient.checkAvailability(
+                            item.getProductId(),
+                            item.getQuantity(),
+                            token
+                    );
+            if (!availability.available()) {
+                throw new IllegalStateException(
+                        "Stock insuficiente para el producto: " + item.getProductId()
+                );
+            }
+        }
+
+        for (OrderItem item : order.getItems()) {
+            inventoryClient.decreaseStock(
+                    item.getProductId(),
+                    item.getQuantity(),
+                    token
+            );
         }
 
         return orderRepository.save(order);
