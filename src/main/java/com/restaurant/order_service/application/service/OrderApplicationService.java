@@ -29,16 +29,17 @@ public class OrderApplicationService {
     }
 
     public Order create(
-            UUID restaurantId,
-            UUID customerId,
-            OrderType orderType,
-            List<CreateOrderItemCommand> items
+        UUID restaurantId,
+        UUID customerId,
+        OrderType orderType,
+        List<CreateOrderItemCommand> items
     ) {
 
         JwtAuthenticationToken authentication =
-            (JwtAuthenticationToken) SecurityContextHolder
-                    .getContext()
-                    .getAuthentication();
+                (JwtAuthenticationToken) SecurityContextHolder
+                        .getContext()
+                        .getAuthentication();
+
         String token = authentication.getToken().getTokenValue();
 
         if (items == null || items.isEmpty()) {
@@ -64,29 +65,71 @@ public class OrderApplicationService {
             order.addItem(orderItem);
         }
 
+        // 1. Validar disponibilidad de TODOS los productos
         for (OrderItem item : order.getItems()) {
+
             InventoryClient.ProductAvailabilityResponse availability =
                     inventoryClient.checkAvailability(
                             item.getProductId(),
                             item.getQuantity(),
                             token
                     );
+
             if (!availability.available()) {
                 throw new IllegalStateException(
-                        "Stock insuficiente para el producto: " + item.getProductId()
+                        "Stock insuficiente para el producto: "
+                                + item.getProductId()
                 );
             }
         }
 
-        for (OrderItem item : order.getItems()) {
-            inventoryClient.decreaseStock(
-                    item.getProductId(),
-                    item.getQuantity(),
-                    token
+        // Productos cuyo stock ya fue descontado
+        List<OrderItem> discountedItems = new java.util.ArrayList<>();
+
+        try {
+
+            // 2. Descontar stock
+            for (OrderItem item : order.getItems()) {
+
+                inventoryClient.decreaseStock(
+                        item.getProductId(),
+                        item.getQuantity(),
+                        token
+                );
+
+                discountedItems.add(item);
+            }
+
+            // 3. Guardar pedido
+            return orderRepository.save(order);
+
+        } catch (Exception exception) {
+
+            // 4. Compensar los descuentos realizados
+            for (OrderItem item : discountedItems) {
+
+                try {
+
+                    inventoryClient.increaseStock(
+                            item.getProductId(),
+                            item.getQuantity(),
+                            token
+                    );
+
+                } catch (Exception compensationException) {
+
+                    // No ocultamos el error original.
+                    // La compensación fallida deberá registrarse
+                    // posteriormente mediante logs/eventos.
+                }
+            }
+
+            throw new IllegalStateException(
+                    "No fue posible crear el pedido. "
+                            + "Los cambios de inventario fueron revertidos.",
+                    exception
             );
         }
-
-        return orderRepository.save(order);
     }
 
     public List<Order> findAll() {
